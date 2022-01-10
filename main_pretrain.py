@@ -18,10 +18,9 @@ from pathlib import Path
 
 import torch
 import torch.backends.cudnn as cudnn
-from torch.utils.tensorboard import SummaryWriter
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
-
+from util.pos_embed import interpolate_pos_embed
+from PIL import Image, ImageDraw, ImageFont
+from timm.models.layers import trunc_normal_
 import timm
 
 assert timm.__version__ == "0.3.2"  # version check
@@ -33,6 +32,8 @@ from util.misc import NativeScalerWithGradNormCount as NativeScaler
 import models_mae
 
 from engine_pretrain import train_one_epoch
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from torch.utils.data import Dataset
 
 
 def get_args_parser():
@@ -75,16 +76,19 @@ def get_args_parser():
     parser.add_argument('--data_path', default='/datasets01/imagenet_full_size/061417/', type=str,
                         help='dataset path')
 
-    parser.add_argument('--output_dir', default='./output_dir',
+    parser.add_argument('--output_dir', default='./font_result',
                         help='path where to save, empty for no saving')
-    parser.add_argument('--log_dir', default='./output_dir',
+    parser.add_argument('--log_dir', default='./log_dir',
                         help='path where to tensorboard log')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=0, type=int)
-    parser.add_argument('--resume', default='',
+    parser.add_argument('--resume', default='../models/mae_finetuned_vit_large.pth',
                         help='resume from checkpoint')
-
+    parser.add_argument('--finetune', default='../models/mae_finetuned_vit_large.pth',
+                        help='finetune from checkpoint')
+    parser.add_argument('--global_pool', action='store_true')
+    parser.set_defaults(global_pool=True)
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--num_workers', default=10, type=int)
@@ -103,6 +107,59 @@ def get_args_parser():
 
     return parser
 
+class FT_Pretrain_Dataset(Dataset):
+    def __init__(self):
+        self.ttf_root = 'ttf_folder/'
+        self.char_root = open('char_dict.txt').read().replace(' ','')
+    def render(self,font, char, size=(256,256), pad=20):
+        font = ImageFont.truetype(font,200)
+        try:
+            width, height = font.getsize(char)
+        except OSError:
+            print('oserror!')
+            width=height=200
+        max_size = max(width, height)
+        if width < height:
+            start_w = (height - width) // 2 + pad
+            start_h = pad
+        else:
+            start_w = pad
+            start_h = (width - height) // 2 + pad
+
+        img = Image.new('RGB', [max_size+(pad*3), max_size+(pad*3)], 'white')
+        draw = ImageDraw.Draw(img)
+        try:
+            draw.text((start_w, start_h), char, font=font,fill = 'black')
+        except OSError:
+            print('oserror!')
+
+        img = img.resize(size, 2)
+        return img
+
+    def __getitem__(self, index):
+        # Define path
+
+        ttf_ind = index%len(os.listdir(self.ttf_root))
+        key_ind = index//len(os.listdir(self.ttf_root))
+        ttf = os.listdir(self.ttf_root)[ttf_ind]
+
+        key = self.char_root[key_ind]
+        # Read images
+        # input
+        if self.ttf_root[-1]!='/':
+            self.ttf_root = self.ttf_root + '/'
+        
+        img = self.render(self.ttf_root+ttf,key)
+        img = img.resize((224, 224))
+        img = np.array(img) / 255.
+        img = img - IMAGENET_DEFAULT_MEAN
+        img = img / IMAGENET_DEFAULT_STD
+
+        img = torch.HalfTensor(img)
+        img = torch.as_tensor(img).permute(2,0,1)
+        return img,img
+    def __len__(self):
+        return len(self.char_root)*len(os.listdir(self.ttf_root))
 
 def main(args):
     misc.init_distributed_mode(args)
@@ -120,13 +177,12 @@ def main(args):
     cudnn.benchmark = True
 
     # simple augmentation
-    transform_train = transforms.Compose([
-            transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-    dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-    print(dataset_train)
+    # transform_train = transforms.Compose([
+    #         transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.ToTensor(),
+    #         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+    dataset_train = FT_Pretrain_Dataset()
 
     if True:  # args.distributed:
         num_tasks = misc.get_world_size()
@@ -138,11 +194,11 @@ def main(args):
     else:
         sampler_train = torch.utils.data.RandomSampler(dataset_train)
 
-    if global_rank == 0 and args.log_dir is not None:
-        os.makedirs(args.log_dir, exist_ok=True)
-        log_writer = SummaryWriter(log_dir=args.log_dir)
-    else:
-        log_writer = None
+    # if global_rank == 0 and args.log_dir is not None:
+    #     os.makedirs(args.log_dir, exist_ok=True)
+    #     log_writer = SummaryWriter(log_dir=args.log_dir)
+    # else:
+    #     log_writer = None
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
@@ -154,11 +210,38 @@ def main(args):
     
     # define the model
     model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
+    if args.finetune :
+        checkpoint = torch.load(args.finetune, map_location='cpu')
+
+        print("Load pre-trained checkpoint from: %s" % args.model)
+        checkpoint_model = checkpoint['model']
+        state_dict = model.state_dict()
+
+
+        # interpolate position embedding
+        interpolate_pos_embed(model, checkpoint_model)
+
+        # load pre-trained model
+        msg = model.load_state_dict(checkpoint_model, strict=False)
+        print(msg.missing_keys)
+
+        # if args.global_pool:
+        #     assert set(msg.missing_keys) == {'head.weight', 'head.bias', 'fc_norm.weight', 'fc_norm.bias'}
+        # else:
+        #     assert set(msg.missing_keys) == {'head.weight', 'head.bias'}
+        # for k in ['head.weight', 'head.bias']:
+        #     if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
+        #         print(f"Removing key {k} from pretrained checkpoint")
+        #         del checkpoint_model[k]
+
+        # manually initialize fc layer
+        # trunc_normal_(model.head.weight, std=2e-5)
+
 
     model.to(device)
 
     model_without_ddp = model
-    print("Model = %s" % str(model_without_ddp))
+    # print("Model = %s" % str(model_without_ddp))
 
     eff_batch_size = args.batch_size * args.accum_iter * misc.get_world_size()
     
@@ -178,7 +261,6 @@ def main(args):
     # following timm: set wd as 0 for bias and norm layers
     param_groups = optim_factory.add_weight_decay(model_without_ddp, args.weight_decay)
     optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
-    print(optimizer)
     loss_scaler = NativeScaler()
 
     misc.load_model(args=args, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler)
@@ -188,23 +270,29 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
-        train_stats = train_one_epoch(
+        train_stats,pred = train_one_epoch(
             model, data_loader_train,
             optimizer, device, epoch, loss_scaler,
-            log_writer=log_writer,
             args=args
         )
-        if args.output_dir and (epoch % 20 == 0 or epoch + 1 == args.epochs):
+        
+        if args.output_dir and (epoch % 5 == 0 or epoch + 1 == args.epochs):
             misc.save_model(
                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                 loss_scaler=loss_scaler, epoch=epoch)
+            
+            eval_img,_ = next(iter(data_loader_train))
+            eval_img = eval_img.float()
+
+            misc.save_img(args,model,eval_img.to(device, non_blocking=True),epoch)
+
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                         'epoch': epoch,}
 
         if args.output_dir and misc.is_main_process():
-            if log_writer is not None:
-                log_writer.flush()
+            # if log_writer is not None:
+            #     log_writer.flush()
             with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                 f.write(json.dumps(log_stats) + "\n")
 

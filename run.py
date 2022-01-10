@@ -36,7 +36,9 @@ def run_one_image(img, model):
 
     # run MAE
     loss, y, mask = model(x.float(), mask_ratio=0.0)
+    
     y = model.unpatchify(y)
+    print(y.shape)
     y = torch.einsum('nchw->nhwc', y).detach().cpu()
 
     # visualize the mask
@@ -77,7 +79,7 @@ def run_one_image(img, model):
 
 
 # load an image
-img = Image.open('/mnt/ljk/liuwei/basic_codes/test_input_folder/xi.jpg')
+img = Image.open('/mnt/ljk/liuwei/MAE-pytorch/uni4E9F.png')
 img = img.resize((224, 224))
 img = np.array(img) / 255.
 
@@ -92,27 +94,27 @@ img = img / imagenet_std
 
 # download checkpoint if not exist
 
-# chkpt_dir = 'mae_visualize_vit_large.pth'
-# model_mae = prepare_model(chkpt_dir, 'mae_vit_large_patch16')
-# print('Model loaded.')
+chkpt_dir = '../models/mae_visualize_vit_large.pth'
+model_mae = prepare_model(chkpt_dir, 'mae_vit_large_patch16')
+print('Model loaded.')
 
-# # make random mask reproducible (comment out to make it change)
-# torch.manual_seed(2)
-# print('MAE with pixel reconstruction:')
-# run_one_image(img, model_mae)
+# make random mask reproducible (comment out to make it change)
+torch.manual_seed(2)
+print('MAE with pixel reconstruction:')
+run_one_image(img, model_mae)
 
 # This is an MAE model trained with an extra GAN loss for more realistic generation (ViT-Large, training mask ratio=0.75)
 
 # download checkpoint if not exist
 
-chkpt_dir = 'mae_visualize_vit_large_ganloss.pth'
-model_mae_gan = prepare_model('mae_visualize_vit_large_ganloss.pth', 'mae_vit_large_patch16')
-print('Model loaded.')
+# chkpt_dir = 'mae_visualize_vit_large_ganloss.pth'
+# model_mae_gan = prepare_model('mae_visualize_vit_large_ganloss.pth', 'mae_vit_large_patch16')
+# print('Model loaded.')
 
 
-# make random mask reproducible (comment out to make it change)
-torch.manual_seed(2)
-print('MAE with extra GAN loss:')
-run_one_image(img, model_mae_gan)
+# # make random mask reproducible (comment out to make it change)
+# torch.manual_seed(2)
+# print('MAE with extra GAN loss:')
+# run_one_image(img, model_mae_gan)
 
 

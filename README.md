@@ -151,6 +151,11 @@ By fine-tuning these pre-trained models, we rank #1 in these classification task
 
 The pre-training instruction is in [PRETRAIN.md](PRETRAIN.md).
 
+### Fine-tuning with ttf dataset
+```
+python3 main_pretrain.py --batch_size 8 --model mae_vit_large_patch16 --norm_pix_loss --mask_ratio 0.75 --epochs 800 --warmup_epochs 40 --blr 1.5e-4 --weight_decay 0.05 --data_path ttf_folder/ --finetune ../../models/mae_finetuned_vit_large.pth
+```
+
 ### License
 
 This project is under the CC-BY-NC 4.0 license. See [LICENSE](LICENSE) for details.

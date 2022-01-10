@@ -311,6 +311,32 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler):
         client_state = {'epoch': epoch}
         model.save_checkpoint(save_dir=args.output_dir, tag="checkpoint-%s" % epoch_name, client_state=client_state)
 
+import cv2
+import numpy as np
+
+def save_img(args, model,input_img,epoch):
+    imagenet_mean = np.array([0.485, 0.456, 0.406])
+    imagenet_std = np.array([0.229, 0.224, 0.225])
+    _,pred,mask = model(input_img, mask_ratio=args.mask_ratio)
+
+    pred = model.unpatchify(pred)
+    pred = torch.einsum('nchw->nhwc',pred).detach().cpu()
+
+    # # visualize the mask
+    # mask = mask.detach()
+    # mask = mask.unsqueeze(-1).repeat(1, 1, model.patch_embed.patch_size[0]**2 *3)  # (N, H*W, p*p*3)
+    # mask = model.unpatchify(mask)  # 1 is removing, 0 is keeping
+    # mask = torch.einsum('nchw->nhwc', mask).detach().cpu()
+
+    # cv2.imwrite('font_result/mask_'+str(epoch)+'.jpg',np.float32(mask[0].detach().cpu()))
+    # cv2.imwrite('font_result/pred_'+str(epoch)+'.jpg',np.float32(pred[0].detach().cpu()))
+    out = torch.clip((pred[0] * imagenet_std + imagenet_mean) * 255, 0, 255).int()
+    out = out.numpy()
+    out = cv2.cvtColor(np.uint8(out), cv2.COLOR_BGR2RGB)
+    cv2.imwrite('font_result/pred_'+str(epoch)+'.jpg',out)
+    
+
+
 
 def load_model(args, model_without_ddp, optimizer, loss_scaler):
     if args.resume:

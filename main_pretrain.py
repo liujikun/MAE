@@ -83,10 +83,8 @@ def get_args_parser():
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=0, type=int)
-    parser.add_argument('--resume', default='../models/mae_finetuned_vit_large.pth',
+    parser.add_argument('--resume', default='../models/mae_visualize_vit_large_ganloss.pth',
                         help='resume from checkpoint')
-    parser.add_argument('--finetune', default='../models/mae_finetuned_vit_large.pth',
-                        help='finetune from checkpoint')
     parser.add_argument('--global_pool', action='store_true')
     parser.set_defaults(global_pool=True)
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
@@ -210,33 +208,6 @@ def main(args):
     
     # define the model
     model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
-    if args.finetune :
-        checkpoint = torch.load(args.finetune, map_location='cpu')
-
-        print("Load pre-trained checkpoint from: %s" % args.model)
-        checkpoint_model = checkpoint['model']
-        state_dict = model.state_dict()
-
-
-        # interpolate position embedding
-        interpolate_pos_embed(model, checkpoint_model)
-
-        # load pre-trained model
-        msg = model.load_state_dict(checkpoint_model, strict=False)
-        print(msg.missing_keys)
-
-        # if args.global_pool:
-        #     assert set(msg.missing_keys) == {'head.weight', 'head.bias', 'fc_norm.weight', 'fc_norm.bias'}
-        # else:
-        #     assert set(msg.missing_keys) == {'head.weight', 'head.bias'}
-        # for k in ['head.weight', 'head.bias']:
-        #     if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
-        #         print(f"Removing key {k} from pretrained checkpoint")
-        #         del checkpoint_model[k]
-
-        # manually initialize fc layer
-        # trunc_normal_(model.head.weight, std=2e-5)
-
 
     model.to(device)
 
